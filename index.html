@@ -1,107 +1,371 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TV Shows Updates Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0d253f;
+            color: #ffffff;
+            font-family: 'Source Sans Pro', sans-serif;
+            padding-bottom: 80px; /* Increased for bottom nav clearance */
+        }
+        .tmdb-green {
+            background-color: #01b4e4;
+        }
+        .tmdb-green:hover {
+            background-color: #0197c1;
+        }
+        .container {
+            background-color: #1a3c5e;
+        }
+        input {
+            background-color: #2a4a75;
+            color: #ffffff;
+            border: 1px solid #3e5e8a;
+        }
+        input::placeholder {
+            color: #a0b3c9;
+        }
+        .card {
+            background-color: #2a4a75;
+        }
+        .details-hidden {
+            display: none;
+        }
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #1a3c5e;
+            border-top: 1px solid #3e5e8a;
+            display: flex;
+            justify-content: space-around;
+            padding: 1rem 0;
+            z-index: 1000;
+        }
+        .nav-tab {
+            cursor: pointer;
+            padding: 0.5rem 1rem;
+            color: #a0b3c9;
+            font-weight: 600;
+        }
+        .nav-tab.active {
+            color: #01b4e4;
+            border-bottom: 2px solid #01b4e4;
+        }
+        .tab-content {
+            margin-bottom: 80px; /* Ensure content clears bottom nav */
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4">
-    <div class="w-full max-w-4xl bg-white rounded-lg shadow-lg p-6">
+<body class="flex flex-col items-center p-4">
+    <div class="w-full max-w-4xl container rounded-lg shadow-lg p-6">
         <h1 class="text-3xl font-bold text-center mb-6">TV Shows Updates Manager</h1>
-        
-        <!-- Search Bar -->
-        <div class="mb-6">
-            <input id="searchInput" type="text" placeholder="Search for a TV show..." 
-                   class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <button id="searchBtn" 
-                    class="mt-2 w-full bg-blue-500 text-white p-3 rounded-lg hover:bg-blue-600">
-                Search
-            </button>
-        </div>
+        <div id="tabContent" class="tab-content"></div>
+    </div>
 
-        <!-- Search Results -->
-        <div id="searchResults" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
-
-        <!-- Tracked Shows -->
-        <h2 class="text-2xl font-semibold mb-4">Tracked Shows</h2>
-        <div id="trackedShows" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+    <!-- Bottom Navigation -->
+    <div class="bottom-nav">
+        <div class="nav-tab" onclick="switchTab('watchlist')">Watchlist</div>
+        <div class="nav-tab" onclick="switchTab('myShows')">My Shows</div>
+        <div class="nav-tab" onclick="switchTab('discover')">Discover</div>
+        <div class="nav-tab" onclick="switchTab('statistics')">Statistics</div>
     </div>
 
     <script>
-        const API_KEY = 'YOUR_TMDB_API_KEY'; // Replace with your TMDb API key
+        const API_KEY = '729cf9f096e955020bb7d27c547be637';
         const BASE_URL = 'https://api.themoviedb.org/3';
         let trackedShows = JSON.parse(localStorage.getItem('trackedShows')) || [];
+        let currentTab = 'myShows';
 
-        // Search for TV shows
-        document.getElementById('searchBtn').addEventListener('click', async () => {
-            const query = document.getElementById('searchInput').value.trim();
-            if (!query) return;
+        // Switch between tabs
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.nav-tab[onclick="switchTab('${tab}')"]`).classList.add('active');
+            renderTabContent();
+        }
 
-            const response = await fetch(
-                `${BASE_URL}/search/tv?api_key=${API_KEY}&query=${encodeURIComponent(query)}`
-            );
-            const data = await response.json();
-            displaySearchResults(data.results);
-        });
+        // Render tab content
+        async function renderTabContent() {
+            const contentDiv = document.getElementById('tabContent');
+            contentDiv.innerHTML = '';
 
-        // Display search results
+            if (currentTab === 'watchlist') {
+                await displayWatchlist(contentDiv);
+            } else if (currentTab === 'myShows') {
+                await displayMyShows(contentDiv);
+            } else if (currentTab === 'discover') {
+                await displayDiscover(contentDiv);
+            } else if (currentTab === 'statistics') {
+                await displayStatistics(contentDiv);
+            }
+        }
+
+        // Discover tab: Search, Trending, Popular, Highest Score
+        async function displayDiscover(container) {
+            container.innerHTML = `
+                <div class="mb-6">
+                    <input id="searchInput" type="text" placeholder="Search for a TV show..." 
+                           class="w-full p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#01b4e4]">
+                    <button id="searchBtn" 
+                            class="mt-2 w-full tmdb-green text-white p-3 rounded-lg">
+                        Search
+                    </button>
+                </div>
+                <div id="searchResults" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+                <h2 class="text-2xl font-semibold mb-4">Trending Now</h2>
+                <div id="trending" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"></div>
+                <h2 class="text-2xl font-semibold mb-4">Most Popular</h2>
+                <div id="popular" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"></div>
+                <h2 class="text-2xl font-semibold mb-4">Highest Score</h2>
+                <div id="highestScore" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"></div>
+            `;
+
+            // Search functionality
+            document.getElementById('searchBtn').addEventListener('click', async () => {
+                const query = document.getElementById('searchInput').value.trim();
+                if (!query) return;
+
+                const response = await fetch(
+                    `${BASE_URL}/search/tv?api_key=${API_KEY}&query=${encodeURIComponent(query)}`
+                );
+                const data = await response.json();
+                displaySearchResults(data.results);
+            });
+
+            // Fetch and display trending, popular, and highest score
+            const trending = await (await fetch(`${BASE_URL}/trending/tv/week?api_key=${API_KEY}`)).json();
+            displayCategory(trending.results.slice(0, 8), 'trending');
+
+            const popular = await (await fetch(`${BASE_URL}/tv/popular?api_key=${API_KEY}`)).json();
+            displayCategory(popular.results.slice(0, 8), 'popular');
+
+            const topRated = await (await fetch(`${BASE_URL}/tv/top_rated?api_key=${API_KEY}`)).json();
+            displayCategory(topRated.results.slice(0, 8), 'highestScore');
+        }
+
+        // Display category (trending, popular, highest score)
+        function displayCategory(shows, containerId) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            shows.forEach(show => {
+                const showCard = document.createElement('div');
+                showCard.className = 'card rounded-lg shadow p-2 cursor-pointer';
+                showCard.innerHTML = `
+                    <img src="${show.poster_path ? `https://image.tmdb.org/t/p/w154${show.poster_path}` : 'https://via.placeholder.com/154x231'}" 
+                         alt="${show.name}" class="rounded mb-2">
+                    <h3 class="text-sm font-semibold">${show.name}</h3>
+                    <p class="text-xs text-gray-300">Rating: ${show.vote_average ? show.vote_average.toFixed(1) + '/10' : 'N/A'}</p>
+                    <div id="details-${show.id}" class="details-hidden mt-2"></div>
+                `;
+                showCard.addEventListener('click', async () => {
+                    const detailsDiv = showCard.querySelector(`#details-${show.id}`);
+                    if (detailsDiv.classList.contains('details-hidden')) {
+                        const response = await fetch(`${BASE_URL}/tv/${show.id}?api_key=${API_KEY}`);
+                        const data = await response.json();
+                        detailsDiv.innerHTML = `
+                            <h3 class="text-lg font-semibold">${show.name}</h3>
+                            <p class="text-sm text-gray-300">Rating: ${show.vote_average ? show.vote_average.toFixed(1) + '/10' : 'N/A'}</p>
+                            <p class="text-sm text-gray-300">${data.overview || 'No description available.'}</p>
+                            <button class="tmdb-green text-white px-4 py-2 rounded mt-2"
+                                    onclick="trackShow(${show.id}, '${show.name.replace(/'/g, "\\'")}', '${show.poster_path}')">
+                                Add
+                            </button>
+                        `;
+                        detailsDiv.classList.remove('details-hidden');
+                    } else {
+                        detailsDiv.classList.add('details-hidden');
+                        detailsDiv.innerHTML = '';
+                    }
+                });
+                container.appendChild(showCard);
+            });
+        }
+
+        // My Shows tab: Next Airing, Waiting, No Longer Airing
+        async function displayMyShows(container) {
+            container.innerHTML = `
+                <h2 class="text-2xl font-semibold mb-4">Next Airing Time</h2>
+                <div id="nextAiring" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+                <h2 class="text-2xl font-semibold mb-4">Waiting for Release Date</h2>
+                <div id="waitingRelease" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+                <h2 class="text-2xl font-semibold mb-4">No Longer Airing</h2>
+                <div id="noLongerAiring" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+            `;
+
+            const nextAiring = [];
+            const waitingRelease = [];
+            const noLongerAiring = [];
+
+            for (const show of trackedShows) {
+                const response = await fetch(
+                    `${BASE_URL}/tv/${show.id}?api_key=${API_KEY}&append_to_response=next_episode_to_air`
+                );
+                const data = await response.json();
+                if (data.next_episode_to_air && data.next_episode_to_air.air_date) {
+                    const airDate = new Date(data.next_episode_to_air.air_date);
+                    const today = new Date();
+                    const daysUntil = Math.ceil((airDate - today) / (1000 * 60 * 60 * 24));
+                    nextAiring.push({ ...show, daysUntil, nextEpisode: data.next_episode_to_air });
+                } else if (data.status === 'Ended' || data.status === 'Canceled') {
+                    noLongerAiring.push(show);
+                } else {
+                    waitingRelease.push(show);
+                }
+            }
+
+            displayShowSection(nextAiring, 'nextAiring', true);
+            displayShowSection(waitingRelease, 'waitingRelease');
+            displayShowSection(noLongerAiring, 'noLongerAiring');
+        }
+
+        // Display shows in a section
+        function displayShowSection(shows, containerId, showDays = false) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            shows.forEach(show => {
+                const showCard = document.createElement('div');
+                showCard.className = 'p-4 card rounded-lg shadow flex flex-col';
+                showCard.innerHTML = `
+                    <div class="flex items-center cursor-pointer" onclick="toggleDetails(${show.id}, this)">
+                        <img src="https://image.tmdb.org/t/p/w92${show.poster_path}" 
+                             alt="${show.name}" class="mr-4 rounded">
+                        <div>
+                            <h3 class="text-lg font-semibold">${show.name}</h3>
+                            <p class="text-sm text-gray-300">${
+                                showDays && show.nextEpisode
+                                    ? `Next: S${show.nextEpisode.season_number}E${show.nextEpisode.episode_number} in ${show.daysUntil} day${show.daysUntil !== 1 ? 's' : ''}`
+                                    : 'No upcoming episodes'
+                            }</p>
+                        </div>
+                    </div>
+                    <div id="details-${show.id}" class="details-hidden mt-4 text-sm text-gray-300"></div>
+                    <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                            onclick="removeShow(${show.id})">
+                        Remove
+                    </button>
+                `;
+                container.appendChild(showCard);
+            });
+        }
+
+        // Watchlist tab: Shows not fully watched
+        async function displayWatchlist(container) {
+            container.innerHTML = `
+                <h2 class="text-2xl font-semibold mb-4">Watchlist</h2>
+                <div id="watchlistShows" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+            `;
+            const watchlist = [];
+            for (const show of trackedShows) {
+                const response = await fetch(`${BASE_URL}/tv/${show.id}?api_key=${API_KEY}&append_to_response=seasons`);
+                const data = await response.json();
+                let totalEpisodes = 0;
+                let watchedEpisodes = 0;
+                const validSeasons = data.seasons.filter(s => s.season_number > 0);
+                for (const season of validSeasons) {
+                    const seasonResponse = await fetch(
+                        `${BASE_URL}/tv/${show.id}/season/${season.season_number}?api_key=${API_KEY}`
+                    );
+                    const seasonData = await seasonResponse.json();
+                    totalEpisodes += seasonData.episodes.length;
+                    seasonData.episodes.forEach(episode => {
+                        if (show.watchedEpisodes[`${season.season_number}-${episode.episode_number}`]) {
+                            watchedEpisodes++;
+                        }
+                    });
+                }
+                if (watchedEpisodes < totalEpisodes) {
+                    watchlist.push({ ...show, watchedEpisodes, totalEpisodes });
+                }
+            }
+            const containerShows = document.getElementById('watchlistShows');
+            containerShows.innerHTML = '';
+            watchlist.forEach(show => {
+                const showCard = document.createElement('div');
+                showCard.className = 'p-4 card rounded-lg shadow flex flex-col';
+                showCard.innerHTML = `
+                    <div class="flex items-center cursor-pointer" onclick="toggleDetails(${show.id}, this)">
+                        <img src="https://image.tmdb.org/t/p/w92${show.poster_path}" 
+                             alt="${show.name}" class="mr-4 rounded">
+                        <div>
+                            <h3 class="text-lg font-semibold">${show.name}</h3>
+                            <p class="text-sm text-gray-300">${show.watchedEpisodes}/${show.totalEpisodes} episodes watched</p>
+                            <p class="text-sm text-gray-300">${show.totalEpisodes - show.watchedEpisodes} episodes left</p>
+                        </div>
+                    </div>
+                    <div id="details-${show.id}" class="details-hidden mt-4 text-sm text-gray-300"></div>
+                    <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                            onclick="removeShow(${show.id})">
+                        Remove
+                    </button>
+                `;
+                containerShows.appendChild(showCard);
+            });
+        }
+
+        // Statistics tab
+        async function displayStatistics(container) {
+            let totalShowsWatched = 0;
+            let totalEpisodesWatched = 0;
+            for (const show of trackedShows) {
+                const response = await fetch(`${BASE_URL}/tv/${show.id}?api_key=${API_KEY}&append_to_response=seasons`);
+                const data = await response.json();
+                let totalEpisodes = 0;
+                let watchedEpisodes = 0;
+                const validSeasons = data.seasons.filter(s => s.season_number > 0);
+                for (const season of validSeasons) {
+                    const seasonResponse = await fetch(
+                        `${BASE_URL}/tv/${show.id}/season/${season.season_number}?api_key=${API_KEY}`
+                    );
+                    const seasonData = await seasonResponse.json();
+                    totalEpisodes += seasonData.episodes.length;
+                    seasonData.episodes.forEach(episode => {
+                        if (show.watchedEpisodes[`${season.season_number}-${episode.episode_number}`]) {
+                            watchedEpisodes++;
+                        }
+                    });
+                }
+                if (watchedEpisodes === totalEpisodes && totalEpisodes > 0) {
+                    totalShowsWatched++;
+                }
+                totalEpisodesWatched += watchedEpisodes;
+            }
+            const hoursWatched = (totalEpisodesWatched * 45 / 60).toFixed(1);
+            container.innerHTML = `
+                <h2 class="text-2xl font-semibold mb-4">Statistics</h2>
+                <div class="p-4 card rounded-lg shadow">
+                    <p class="text-lg">Shows Fully Watched: ${totalShowsWatched}</p>
+                    <p class="text-lg">Episodes Watched: ${totalEpisodesWatched}</p>
+                    <p class="text-lg">Hours Watched: ~${hoursWatched}</p>
+                </div>
+            `;
+        }
+
+        // Search results
         function displaySearchResults(shows) {
             const resultsContainer = document.getElementById('searchResults');
             resultsContainer.innerHTML = '';
-
             shows.forEach(show => {
                 const showCard = document.createElement('div');
-                showCard.className = 'p-4 bg-gray-50 rounded-lg shadow flex justify-between items-center';
+                showCard.className = 'p-4 card rounded-lg shadow flex items-center';
                 showCard.innerHTML = `
-                    <div>
+                    <img src="${show.poster_path ? `https://image.tmdb.org/t/p/w92${show.poster_path}` : 'https://via.placeholder.com/92x138'}" 
+                         alt="${show.name}" class="mr-4 rounded">
+                    <div class="flex-1">
                         <h3 class="text-lg font-semibold">${show.name}</h3>
-                        <p class="text-sm text-gray-600">${
+                        <p class="text-sm text-gray-300">${
                             show.first_air_date ? show.first_air_date.split('-')[0] : 'N/A'
                         }</p>
+                        <p class="text-sm text-gray-300">Rating: ${show.vote_average ? show.vote_average.toFixed(1) + '/10' : 'N/A'}</p>
                     </div>
-                    <button class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
-                            onclick="trackShow(${show.id}, '${show.name}', '${show.poster_path}')">
-                        Track
+                    <button class="tmdb-green text-white px-4 py-2 rounded"
+                            onclick="trackShow(${show.id}, '${show.name.replace(/'/g, "\\'")}', '${show.poster_path}')">
+                        Add
                     </button>
                 `;
                 resultsContainer.appendChild(showCard);
@@ -111,56 +375,134 @@
         // Track a show
         window.trackShow = (id, name, poster_path) => {
             if (!trackedShows.find(show => show.id === id)) {
-                trackedShows.push({ id, name, poster_path, watched: [] });
+                trackedShows.push({ id, name, poster_path, watchedSeasons: [], watchedEpisodes: {}, watched: [] });
                 localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
-                displayTrackedShows();
+                renderTabContent();
             }
         };
 
-        // Display tracked shows
-        async function displayTrackedShows() {
-            const trackedContainer = document.getElementById('trackedShows');
-            trackedContainer.innerHTML = '';
-
-            for (const show of trackedShows) {
-                const response = await fetch(
-                    `${BASE_URL}/tv/${show.id}?api_key=${API_KEY}&append_to_response=next_episode_to_air`
-                );
-                const data = await response.json();
-
-                const showCard = document.createElement('div');
-                showCard.className = 'p-4 bg-gray-50 rounded-lg shadow flex flex-col';
-                showCard.innerHTML = `
-                    <div class="flex items-center">
-                        <img src="https://image.tmdb.org/t/p/w92${show.poster_path}" 
-                             alt="${show.name}" class="mr-4 rounded">
-                        <div>
-                            <h3 class="text-lg font-semibold">${show.name}</h3>
-                            <p class="text-sm text-gray-600">${
-                                data.next_episode_to_air
-                                    ? `Next: S${data.next_episode_to_air.season_number}E${data.next_episode_to_air.episode_number} on ${data.next_episode_to_air.air_date}`
-                                    : 'No upcoming episodes'
-                            }</p>
-                        </div>
+        // Fetch show details
+        async function fetchShowDetails(showId) {
+            const response = await fetch(
+                `${BASE_URL}/tv/${showId}?api_key=${API_KEY}&append_to_response=seasons`
+            );
+            const data = await response.json();
+            let seasonsHTML = '';
+            const validSeasons = data.seasons.filter(season => season.season_number > 0);
+            for (const season of validSeasons) {
+                seasonsHTML += `
+                    <div class="mt-2">
+                        <label class="flex items-center">
+                            <input type="checkbox" class="mr-2" 
+                                   onchange="toggleSeasonWatched(${showId}, ${season.season_number}, this.checked)"
+                                   ${trackedShows.find(s => s.id === showId)?.watchedSeasons.includes(season.season_number) ? 'checked' : ''}>
+                            <h4 class="text-md font-semibold cursor-pointer"
+                                onclick="toggleSeasonEpisodes(${showId}, ${season.season_number}, this)">
+                                Season ${season.season_number}
+                            </h4>
+                        </label>
+                        <div id="episodes-${showId}-${season.season_number}" class="details-hidden text-sm text-gray-300"></div>
                     </div>
-                    <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-                            onclick="removeShow(${show.id})">
-                        Remove
-                    </button>
                 `;
-                trackedContainer.appendChild(showCard);
             }
+            return {
+                overview: data.overview || 'No description available.',
+                seasonsHTML
+            };
         }
 
-        // Remove a tracked show
+        // Fetch episodes for a season
+        async function fetchSeasonEpisodes(showId, seasonNumber) {
+            const response = await fetch(
+                `${BASE_URL}/tv/${showId}/season/${seasonNumber}?api_key=${API_KEY}`
+            );
+            const data = await response.json();
+            let episodesHTML = '<ul class="ml-4">';
+            data.episodes.forEach(episode => {
+                const isWatched = trackedShows.find(s => s.id === showId)?.watchedEpisodes[`${seasonNumber}-${episode.episode_number}`] || false;
+                episodesHTML += `
+                    <li>
+                        <label class="flex items-center">
+                            <input type="checkbox" class="mr-2" 
+                                   onchange="toggleEpisodeWatched(${showId}, ${seasonNumber}, ${episode.episode_number}, this.checked)"
+                                   ${isWatched ? 'checked' : ''}>
+                            Episode ${episode.episode_number}: ${episode.name} (${episode.air_date || 'TBD'})
+                        </label>
+                    </li>
+                `;
+            });
+            episodesHTML += '</ul>';
+            return episodesHTML;
+        }
+
+        // Toggle season episodes
+        window.toggleSeasonEpisodes = async (showId, seasonNumber, element) => {
+            const episodesDiv = document.getElementById(`episodes-${showId}-${seasonNumber}`);
+            if (episodesDiv.classList.contains('details-hidden')) {
+                const episodesHTML = await fetchSeasonEpisodes(showId, seasonNumber);
+                episodesDiv.innerHTML = episodesHTML;
+                episodesDiv.classList.remove('details-hidden');
+            } else {
+                episodesDiv.classList.add('details-hidden');
+                episodesDiv.innerHTML = '';
+            }
+        };
+
+        // Toggle season watched status
+        window.toggleSeasonWatched = (showId, seasonNumber, isChecked) => {
+            const show = trackedShows.find(s => s.id === showId);
+            if (!show) return;
+            if (isChecked) {
+                if (!show.watchedSeasons.includes(seasonNumber)) {
+                    show.watchedSeasons.push(seasonNumber);
+                }
+            } else {
+                show.watchedSeasons = show.watchedSeasons.filter(s => s !== seasonNumber);
+            }
+            localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
+            renderTabContent();
+        };
+
+        // Toggle episode watched status
+        window.toggleEpisodeWatched = (showId, seasonNumber, episodeNumber, isChecked) => {
+            const show = trackedShows.find(s => s.id === showId);
+            if (!show) return;
+            const key = `${seasonNumber}-${episodeNumber}`;
+            if (isChecked) {
+                show.watchedEpisodes[key] = true;
+            } else {
+                delete show.watchedEpisodes[key];
+            }
+            localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
+            renderTabContent();
+        };
+
+        // Toggle show details
+        window.toggleDetails = async (showId, element) => {
+            const detailsDiv = document.getElementById(`details-${showId}`);
+            if (detailsDiv.classList.contains('details-hidden')) {
+                const { overview, seasonsHTML } = await fetchShowDetails(showId);
+                detailsDiv.innerHTML = `
+                    <p><strong>Overview:</strong> ${overview}</p>
+                    <h4 class="text-md font-semibold mt-2">Seasons:</h4>
+                    ${seasonsHTML}
+                `;
+                detailsDiv.classList.remove('details-hidden');
+            } else {
+                detailsDiv.classList.add('details-hidden');
+                detailsDiv.innerHTML = '';
+            }
+        };
+
+        // Remove a show
         window.removeShow = (id) => {
             trackedShows = trackedShows.filter(show => show.id !== id);
             localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
-            displayTrackedShows();
+            renderTabContent();
         };
 
-        // Initialize tracked shows on page load
-        displayTrackedShows();
+        // Initialize
+        switchTab('myShows');
     </script>
 </body>
 </html>
