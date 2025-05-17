@@ -1,0 +1,166 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Shows Updates Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4">
+    <div class="w-full max-w-4xl bg-white rounded-lg shadow-lg p-6">
+        <h1 class="text-3xl font-bold text-center mb-6">TV Shows Updates Manager</h1>
+        
+        <!-- Search Bar -->
+        <div class="mb-6">
+            <input id="searchInput" type="text" placeholder="Search for a TV show..." 
+                   class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="searchBtn" 
+                    class="mt-2 w-full bg-blue-500 text-white p-3 rounded-lg hover:bg-blue-600">
+                Search
+            </button>
+        </div>
+
+        <!-- Search Results -->
+        <div id="searchResults" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6"></div>
+
+        <!-- Tracked Shows -->
+        <h2 class="text-2xl font-semibold mb-4">Tracked Shows</h2>
+        <div id="trackedShows" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+    </div>
+
+    <script>
+        const API_KEY = 'YOUR_TMDB_API_KEY'; // Replace with your TMDb API key
+        const BASE_URL = 'https://api.themoviedb.org/3';
+        let trackedShows = JSON.parse(localStorage.getItem('trackedShows')) || [];
+
+        // Search for TV shows
+        document.getElementById('searchBtn').addEventListener('click', async () => {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) return;
+
+            const response = await fetch(
+                `${BASE_URL}/search/tv?api_key=${API_KEY}&query=${encodeURIComponent(query)}`
+            );
+            const data = await response.json();
+            displaySearchResults(data.results);
+        });
+
+        // Display search results
+        function displaySearchResults(shows) {
+            const resultsContainer = document.getElementById('searchResults');
+            resultsContainer.innerHTML = '';
+
+            shows.forEach(show => {
+                const showCard = document.createElement('div');
+                showCard.className = 'p-4 bg-gray-50 rounded-lg shadow flex justify-between items-center';
+                showCard.innerHTML = `
+                    <div>
+                        <h3 class="text-lg font-semibold">${show.name}</h3>
+                        <p class="text-sm text-gray-600">${
+                            show.first_air_date ? show.first_air_date.split('-')[0] : 'N/A'
+                        }</p>
+                    </div>
+                    <button class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                            onclick="trackShow(${show.id}, '${show.name}', '${show.poster_path}')">
+                        Track
+                    </button>
+                `;
+                resultsContainer.appendChild(showCard);
+            });
+        }
+
+        // Track a show
+        window.trackShow = (id, name, poster_path) => {
+            if (!trackedShows.find(show => show.id === id)) {
+                trackedShows.push({ id, name, poster_path, watched: [] });
+                localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
+                displayTrackedShows();
+            }
+        };
+
+        // Display tracked shows
+        async function displayTrackedShows() {
+            const trackedContainer = document.getElementById('trackedShows');
+            trackedContainer.innerHTML = '';
+
+            for (const show of trackedShows) {
+                const response = await fetch(
+                    `${BASE_URL}/tv/${show.id}?api_key=${API_KEY}&append_to_response=next_episode_to_air`
+                );
+                const data = await response.json();
+
+                const showCard = document.createElement('div');
+                showCard.className = 'p-4 bg-gray-50 rounded-lg shadow flex flex-col';
+                showCard.innerHTML = `
+                    <div class="flex items-center">
+                        <img src="https://image.tmdb.org/t/p/w92${show.poster_path}" 
+                             alt="${show.name}" class="mr-4 rounded">
+                        <div>
+                            <h3 class="text-lg font-semibold">${show.name}</h3>
+                            <p class="text-sm text-gray-600">${
+                                data.next_episode_to_air
+                                    ? `Next: S${data.next_episode_to_air.season_number}E${data.next_episode_to_air.episode_number} on ${data.next_episode_to_air.air_date}`
+                                    : 'No upcoming episodes'
+                            }</p>
+                        </div>
+                    </div>
+                    <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                            onclick="removeShow(${show.id})">
+                        Remove
+                    </button>
+                `;
+                trackedContainer.appendChild(showCard);
+            }
+        }
+
+        // Remove a tracked show
+        window.removeShow = (id) => {
+            trackedShows = trackedShows.filter(show => show.id !== id);
+            localStorage.setItem('trackedShows', JSON.stringify(trackedShows));
+            displayTrackedShows();
+        };
+
+        // Initialize tracked shows on page load
+        displayTrackedShows();
+    </script>
+</body>
+</html>
